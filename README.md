@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/25590800/README.md)
 # NetSeeCSV
 
 A Python-based GUI application for monitoring active network connections on Linux Systems with CSV Export.
