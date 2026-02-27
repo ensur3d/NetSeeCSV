@@ -40,6 +40,13 @@ Run the application (without venv):
 ```bash
 python3 NetSeeCSV.py
 ```
+Or
+Run from double clicking
+```bash
+chmod +x NetSeeCSV.py
+```
+now executable can just be ran from double clicking file explorer
+or from running in the terminal without python3 before hand.
 
 ### Setup Virtual Environment
 
@@ -76,7 +83,7 @@ python3 NetSeeCSV.py
 To deactivate the venv:
 ```bash
 deactivate
-``` 
+```
 ## Features
 
 - **Connection Monitoring**: Displays all active TCP/UDP connections (IPv4 and IPv6)
