@@ -2,6 +2,10 @@
 
 A Python-based GUI application for monitoring active network connections on Linux Systems with CSV Export.
 
+
+<img width="1598" height="961" alt="NetSeeCSV1" src="https://github.com/user-attachments/assets/195419a6-8463-4dc7-8378-3bfeae7c4c90" />
+
+
 ## Requirements
 
 - Python 3.12
