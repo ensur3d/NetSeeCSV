@@ -11,6 +11,7 @@ import threading
 import re
 import os
 import logging
+import webbrowser
 from datetime import datetime
 
 class NetworkMonitor:
@@ -27,14 +28,20 @@ class NetworkMonitor:
         self.connections = []
         self.refreshing = False
         self.auto_refresh_enabled = False
-        self.auto_refresh_interval = 5000  # 5 seconds
+        self.auto_refresh_interval = 3000  # 3 seconds
         self.auto_refresh_job = None
         
         # GUI
         self.create_menu()
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
         self.create_toolbar()
         self.create_treeview()
         self.create_status_bar()
+        
+        # Configure main_frame grid weights after all children are added
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(1, weight=1)
         
         # Initialize dark mode after GUI is created
         self.dark_mode = False
@@ -73,12 +80,13 @@ class NetworkMonitor:
         help_menu.add_command(label="About", command=self.show_about)
         
     def create_toolbar(self):
-        toolbar = ttk.Frame(self.root)
-        toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        toolbar = ttk.Frame(self.main_frame)
+        toolbar.grid(row=0, column=0, sticky='ew', padx=5, pady=5)
         
         ttk.Button(toolbar, text="Refresh", command=self.refresh_connections).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Filter", command=self.show_filters).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Export", command=self.export_csv).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="IP Lookup", command=self.show_ip_lookup).pack(side=tk.LEFT, padx=2)
         
         # Auto-refresh checkbox
         self.auto_refresh_var = tk.BooleanVar()
@@ -86,39 +94,37 @@ class NetworkMonitor:
                        command=self.toggle_auto_refresh).pack(side=tk.RIGHT, padx=2)
         
     def create_treeview(self):
-        # Create treeview frame
-        tree_frame = ttk.Frame(self.root)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tree_frame = ttk.Frame(self.main_frame)
+        tree_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
         
-        # Create treeview with scrollbars
-        columns = ("Protocol", "Local Address", "Remote Address", "State", "PID", "Process", "Local Port", "Remote Port")
+        columns = ("Protocol", "Local Address", "Local Port", "Remote Address", "Remote Port", "State", "PID", "Process")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=30)
         
-        # Define headings
         for col in columns:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_treeview(c))
             self.tree.column(col, width=120)
             
-        # Configure column widths
         self.tree.column("Protocol", width=80)
-        self.tree.column("Local Address", width=220)
-        self.tree.column("Remote Address", width=220)
-        self.tree.column("State", width=120)
-        self.tree.column("PID", width=80)
-        self.tree.column("Process", width=180)
-        self.tree.column("Local Port", width=100)
-        self.tree.column("Remote Port", width=100)
+        self.tree.column("Local Address", width=180)
+        self.tree.column("Local Port", width=80)
+        self.tree.column("Remote Address", width=180)
+        self.tree.column("Remote Port", width=80)
+        self.tree.column("State", width=100)
+        self.tree.column("PID", width=70)
+        self.tree.column("Process", width=150)
         
-        # Add scrollbars
         v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=v_scrollbar.set)
         
-        # Pack treeview and scrollbars
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        v_scrollbar.grid(row=0, column=1, sticky='ns')
+        
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(1, weight=0)
         
         # Context menu
-        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu = tk.Menu(self.main_frame, tearoff=0)
         self.context_menu.add_command(label="Show Connection Info", command=self.show_connection_details)
         self.context_menu.add_command(label="Kill Process", command=self.kill_process)
         self.context_menu.add_separator()
@@ -128,8 +134,8 @@ class NetworkMonitor:
         self.tree.bind("<Button-3>", self.show_context_menu)
         
     def create_status_bar(self):
-        self.status_bar = ttk.Label(self.root, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_bar = ttk.Label(self.main_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.grid(row=2, column=0, sticky='ew', padx=5, pady=(0, 5))
         
     def show_context_menu(self, event):
         try:
@@ -143,9 +149,34 @@ class NetworkMonitor:
         # Simple filter dialog
         filter_window = tk.Toplevel(self.root)
         filter_window.title("Filter Connections")
-        filter_window.geometry("300x250")
+        filter_window.geometry("300x280")
         filter_window.transient(self.root)
-        filter_window.grab_set()
+        
+        self.apply_dark_mode_to_window(filter_window)
+        
+        def is_valid_ip(ip):
+            import ipaddress
+            try:
+                ipaddress.ip_address(ip)
+                return True
+            except ValueError:
+                return False
+        
+        def validate_ip_input(P):
+            if P == "":
+                return True
+            if all(c in "0123456789.:abcdefABCDEF" for c in P):
+                return True
+            return False
+        
+        # Address filter
+        ttk.Label(filter_window, text="Address Filter:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        addr_var = tk.StringVar()
+        addr_entry = ttk.Entry(filter_window, textvariable=addr_var)
+        addr_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        vcmd = (addr_entry.register(validate_ip_input), '%P')
+        addr_entry.config(validate='key', validatecommand=vcmd)
         
         # Context menu for paste functionality
         context_menu = tk.Menu(filter_window, tearoff=0)
@@ -159,26 +190,20 @@ class NetworkMonitor:
         filter_window.bind("<Button-3>", show_context_menu)
         
         # Protocol filter
-        ttk.Label(filter_window, text="Protocol:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(filter_window, text="Protocol:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         protocol_var = tk.StringVar()
         protocol_combo = ttk.Combobox(filter_window, textvariable=protocol_var, 
                                      values=["All", "TCP", "UDP", "TCP6", "UDP6"])
         protocol_combo.set("All")
-        protocol_combo.grid(row=0, column=1, padx=5, pady=5)
+        protocol_combo.grid(row=1, column=1, padx=5, pady=5)
         
         # State filter
-        ttk.Label(filter_window, text="State:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(filter_window, text="State:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         state_var = tk.StringVar()
         state_combo = ttk.Combobox(filter_window, textvariable=state_var,
                                   values=["All", "ESTAB", "LISTEN", "TIME_WAIT", "CLOSE_WAIT", "UNCONN"])
         state_combo.set("All")
-        state_combo.grid(row=1, column=1, padx=5, pady=5)
-        
-        # Address filter
-        ttk.Label(filter_window, text="Address Filter:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
-        addr_var = tk.StringVar()
-        addr_entry = ttk.Entry(filter_window, textvariable=addr_var)
-        addr_entry.grid(row=2, column=1, padx=5, pady=5)
+        state_combo.grid(row=2, column=1, padx=5, pady=5)
         
         # Port filter
         ttk.Label(filter_window, text="Port Filter:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
@@ -186,9 +211,35 @@ class NetworkMonitor:
         port_entry = ttk.Entry(filter_window, textvariable=port_var)
         port_entry.grid(row=3, column=1, padx=5, pady=5)
         
+        def validate_port_input(P):
+            if P == "":
+                return True
+            if all(c in "0123456789" for c in P):
+                return True
+            return False
+        
+        vcmd_port = (port_entry.register(validate_port_input), '%P')
+        port_entry.config(validate='key', validatecommand=vcmd_port)
+        
+        def apply_filter():
+            addr = addr_var.get().strip()
+            if addr and not is_valid_ip(addr):
+                messagebox.showwarning("Invalid IP", "Not a valid IP address")
+                return
+            port = port_var.get().strip()
+            if port:
+                try:
+                    port_num = int(port)
+                    if port_num < 1 or port_num > 65535:
+                        messagebox.showwarning("Invalid Port", "Port must be between 1 and 65535")
+                        return
+                except ValueError:
+                    messagebox.showwarning("Invalid Port", "Port must be a number")
+                    return
+            self.apply_filters(protocol_var.get(), state_var.get(), addr_var.get(), port_var.get(), filter_window)
+        
         # Apply button
-        ttk.Button(filter_window, text="Apply", command=lambda: self.apply_filters(
-            protocol_var.get(), state_var.get(), addr_var.get(), port_var.get(), filter_window)).grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(filter_window, text="Apply", command=apply_filter).grid(row=4, column=0, columnspan=2, pady=10)
         
     def apply_filters(self, protocol, state, address_filter, port_filter, window):
         # Filter the connections based on the criteria
@@ -223,18 +274,79 @@ class NetworkMonitor:
         # Close the filter window
         window.destroy()
         
-    def refresh_connections(self):
-        if self.refreshing:
-            return
-            
-        self.refreshing = True
-        self.status_bar.config(text="Refreshing connections...")
-        self.root.update()
+    def show_ip_lookup(self):
+        ip_window = tk.Toplevel(self.root)
+        ip_window.title("IP Lookup")
+        ip_window.geometry("400x350")
+        ip_window.transient(self.root)
         
-        # Run in separate thread to avoid freezing GUI
-        thread = threading.Thread(target=self._refresh_connections_thread)
-        thread.daemon = True
-        thread.start()
+        self.apply_dark_mode_to_window(ip_window)
+        
+        ttk.Label(ip_window, text="Enter IP Address:").pack(pady=(15, 5))
+        
+        ip_var = tk.StringVar()
+        ip_entry = ttk.Entry(ip_window, textvariable=ip_var, width=40)
+        ip_entry.pack(pady=5)
+        ip_entry.focus()
+        
+        def is_valid_ip(ip):
+            import ipaddress
+            try:
+                ipaddress.ip_address(ip)
+                return True
+            except ValueError:
+                return False
+        
+        def validate_ip_input(P):
+            if P == "":
+                return True
+            if all(c in "0123456789.:abcdefABCDEF" for c in P):
+                return True
+            return False
+        
+        vcmd = (ip_entry.register(validate_ip_input), '%P')
+        ip_entry.config(validate='key', validatecommand=vcmd)
+        
+        # Context menu for paste functionality
+        context_menu = tk.Menu(ip_window, tearoff=0)
+        context_menu.add_command(label="Paste", command=lambda: self.paste_to_focused(ip_window, ip_entry))
+        
+        def show_context_menu(event):
+            context_menu.tk_popup(event.x_root, event.y_root)
+        
+        ip_entry.bind("<Button-3>", show_context_menu)
+        
+        def open_url(url_template):
+            ip = ip_var.get().strip()
+            if not ip:
+                messagebox.showwarning("Invalid IP", "Please enter an IP address")
+                return
+            if not is_valid_ip(ip):
+                messagebox.showwarning("Invalid IP", "Not a valid IP address")
+                return
+            url = url_template.format(ip=ip)
+            webbrowser.open(url)
+        
+        button_frame = ttk.Frame(ip_window)
+        button_frame.pack(pady=15)
+        
+        services = [
+            ("Greynoise", "https://www.greynoise.io/viz/ip/{ip}"),
+            ("Shodan", "https://www.shodan.io/search?query={ip}"),
+            ("AbuseIPDB", "https://www.abuseipdb.com/check/{ip}"),
+            ("VirusTotal", "https://www.virustotal.com/gui/ip-address/{ip}"),
+            ("BGP_HE", "https://bgp.he.net/ip/{ip}"),
+            ("Blacklist_Check", "https://www.blacklistmaster.com/check?t={ip}"),
+        ]
+        
+        for i, (name, url) in enumerate(services):
+            btn = ttk.Button(button_frame, text=name, command=lambda u=url: open_url(u))
+            btn.grid(row=i//2, column=i%2, padx=5, pady=5, sticky='ew')
+        
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+        
+        ttk.Button(ip_window, text="Close", command=ip_window.destroy).pack(pady=10)
         
     def _validate_commands(self, commands):
         """
@@ -276,6 +388,17 @@ class NetworkMonitor:
             validated.append(list(cmd))
         
         return validated
+    
+    def refresh_connections(self):
+        if self.refreshing:
+            return
+            
+        self.refreshing = True
+        self.root.update()
+        
+        thread = threading.Thread(target=self._refresh_connections_thread)
+        thread.daemon = True
+        thread.start()
         
     def _refresh_connections_thread(self):
         try:
@@ -399,13 +522,15 @@ class NetworkMonitor:
                 
                 # Extract remote port
                 remote_port = self.extract_port(remote_addr_port)
+                local_addr = self.extract_address(local_addr_port)
+                remote_addr = self.extract_address(remote_addr_port)
                 
                 # Only add connection if we have the basic info
                 if local_addr_port and remote_addr_port:
                     connections.append({
                         'protocol': protocol,
-                        'local_addr': local_addr_port,
-                        'remote_addr': remote_addr_port,
+                        'local_addr': local_addr,
+                        'remote_addr': remote_addr,
                         'state': state,
                         'pid': pid,
                         'process': process,
@@ -435,6 +560,22 @@ class NetworkMonitor:
         except:
             return "N/A"
             
+    def extract_address(self, address):
+        """Extract address without port"""
+        try:
+            if ':' in address:
+                if address.startswith('[') and ']' in address:
+                    addr_start = address.find('[') + 1
+                    addr_end = address.find(']:')
+                    if addr_end > 0:
+                        return address[addr_start:addr_end]
+                    return address
+                else:
+                    return ':'.join(address.split(':')[:-1])
+            return address
+        except:
+            return address
+            
     def update_connection_tree(self, connections):
         # Clear existing items
         for item in self.tree.get_children():
@@ -445,12 +586,12 @@ class NetworkMonitor:
             self.tree.insert("", tk.END, values=(
                 conn['protocol'],
                 conn['local_addr'],
+                conn['port'],
                 conn['remote_addr'],
+                conn['remote_port'],
                 conn['state'],
                 conn['pid'],
-                conn['process'],
-                conn['port'],
-                conn['remote_port']
+                conn['process']
             ))
             
         # Update status bar
@@ -461,6 +602,8 @@ class NetworkMonitor:
         
     def _refresh_complete(self):
         self.refreshing = False
+        if self.auto_refresh_enabled:
+            self.start_auto_refresh()
         
     def sort_treeview(self, column):
         # Simple sorting implementation
@@ -515,7 +658,7 @@ class NetworkMonitor:
             return
             
         item = self.tree.item(selected[0])
-        address = item['values'][1]  # Local address
+        address = item['values'][1]  # Local Address
         self.root.clipboard_clear()
         self.root.clipboard_append(address)
         
@@ -525,7 +668,7 @@ class NetworkMonitor:
             return
             
         item = self.tree.item(selected[0])
-        address = item['values'][2]  # Remote address
+        address = item['values'][3]  # Remote Address
         self.root.clipboard_clear()
         self.root.clipboard_append(address)
         
@@ -637,7 +780,8 @@ class NetworkMonitor:
             self.root.configure(bg='#2b2b2b')
             self.style.configure('TFrame', background='#2b2b2b')
             self.style.configure('TLabel', background='#2b2b2b', foreground='#ffffff')
-            self.style.configure('TCheckbutton', background='#2b2b2b', foreground='#ffffff')
+            self.style.configure('TCheckbutton', background='#2b2b2b', foreground="#ffffff")
+            self.style.configure('TEntry', fieldbackground='#333333', foreground='#ffffff')
             
             # Update menu bar for dark mode
             self.root.option_add('*Menu.background', '#2b2b2b')
@@ -665,6 +809,7 @@ class NetworkMonitor:
             self.style.configure('TFrame', background='#f0f0f0')
             self.style.configure('TLabel', background='#f0f0f0', foreground='#000000')
             self.style.configure('TCheckbutton', background='#f0f0f0', foreground='#000000')
+            self.style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000')
             
             # Update menu bar for light mode
             self.root.option_add('*Menu.background', '#f0f0f0')
@@ -677,15 +822,39 @@ class NetworkMonitor:
             bg_color = '#2b2b2b' if self.dark_mode else '#f0f0f0'
             fg_color = '#ffffff' if self.dark_mode else '#000000'
             self.context_menu.configure(bg=bg_color, fg=fg_color)
-            for i in range(self.context_menu.index(tk.END) + 1):
-                try:
-                    # Check if entry type supports foreground/background (separators don't)
-                    entry_type = self.context_menu.type(i)
-                    if entry_type in ['cascade', 'command', 'checkbutton', 'radiobutton']:
-                        self.context_menu.entryconfig(i, background=bg_color, foreground=fg_color)
-                except Exception:
-                    # Silently skip entries that don't support color config (separators, tearoffs)
-                    pass
+            menu_end = self.context_menu.index(tk.END)
+            if menu_end is not None:
+                for i in range(menu_end + 1):
+                    try:
+                        entry_type = self.context_menu.type(i)
+                        if entry_type in ['cascade', 'command', 'checkbutton', 'radiobutton']:
+                            self.context_menu.entryconfig(i, background=bg_color, foreground=fg_color)
+                    except Exception:
+                        pass
+    
+    def apply_dark_mode_to_window(self, window):
+        if self.dark_mode:
+            window.configure(bg='#2b2b2b')
+            for widget in window.winfo_children():
+                self._apply_dark_mode_to_widget(widget)
+    
+    def _apply_dark_mode_to_widget(self, widget):
+        widget_class = widget.winfo_class()
+        if widget_class in ['TFrame', 'TLabelframe']:
+            widget.configure(style='Dark.TFrame' if hasattr(widget, 'configure') else None)
+            for child in widget.winfo_children():
+                self._apply_dark_mode_to_widget(child)
+        elif widget_class == 'TLabel':
+            widget.configure(background='#2b2b2b', foreground='#ffffff')
+        elif widget_class == 'TEntry':
+            widget.configure(background='#333333', foreground='#ffffff', fieldbackground='#333333')
+        elif widget_class == 'TButton':
+            widget.configure(style='Dark.TButton')
+        elif widget_class == 'TCombobox':
+            widget.configure(background='#333333', foreground='#ffffff', fieldbackground='#333333')
+        
+        for child in widget.winfo_children():
+            self._apply_dark_mode_to_widget(child)
 
 # Set up logging
 logging.basicConfig(
