@@ -28,7 +28,7 @@ class NetworkMonitor:
         self.connections = []
         self.refreshing = False
         self.auto_refresh_enabled = False
-        self.auto_refresh_interval = 3000  # 3 seconds
+        self.auto_refresh_interval = 4000  # 4 seconds
         self.auto_refresh_job = None
         
         # GUI
@@ -623,12 +623,12 @@ class NetworkMonitor:
         
         details = f"Protocol: {values[0]}\n"
         details += f"Local Address: {values[1]}\n"
-        details += f"Remote Address: {values[2]}\n"
-        details += f"State: {values[3]}\n"
-        details += f"PID: {values[4]}\n"
-        details += f"Process: {values[5]}\n"
-        details += f"Local Port: {values[6]}\n"
-        details += f"Remote Port: {values[7]}"
+        details += f"Local Port: {values[2]}\n"
+        details += f"Remote Address: {values[3]}\n"
+        details += f"Remote Port: {values[4]}\n"
+        details += f"State: {values[5]}\n"
+        details += f"PID: {values[6]}\n"
+        details += f"Process: {values[7]}"
         
         messagebox.showinfo("Connection Details", details)
         
@@ -638,7 +638,7 @@ class NetworkMonitor:
             return
             
         item = self.tree.item(selected[0])
-        pid = item['values'][4]
+        pid = item['values'][6]
         
         if pid == "-" or pid == "N/A":
             messagebox.showwarning("Warning", "No PID available for this connection")
@@ -750,6 +750,7 @@ class NetworkMonitor:
             "- Auto-refresh functionality\n"
             "- Dark Mode\n"
             "- Kill processes listed with connection\n"
+            "- IP-Lookup feature\n"
         )
         messagebox.showinfo("About", about_text)
         
