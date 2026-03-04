@@ -2,8 +2,7 @@
 
 A Python-based GUI application for monitoring active network connections on Linux Systems with CSV Export.
 
-
-<img width="1598" height="961" alt="NetSeeCSV1" src="https://github.com/user-attachments/assets/195419a6-8463-4dc7-8378-3bfeae7c4c90" />
+<img width="1594" height="965" alt="Screenshot from 2026-03-03 22-44-25" src="https://github.com/user-attachments/assets/daaa1ca1-3b63-4261-94ce-041cca0a0f31" />
 
 
 ## Requirements
@@ -45,8 +44,7 @@ Run from double clicking
 ```bash
 chmod +x NetSeeCSV.py
 ```
-now executable can just be ran from double clicking file explorer
-or from running in the terminal without python3 before hand.
+now executable can just be ran from double clicking file explorer then clicking run
 
 ### Setup Virtual Environment
 
@@ -93,6 +91,7 @@ deactivate
 - **Auto-Refresh**: Automatically periodic updates of connection data
 - **Dark Mode**: Toggle between light and dark themes
 - **Context Menu**: Right-click actions for connection details and termination
+- **IP-Lookup**: Lookup remote IP adresses
 
 ## Security Features
 
@@ -124,6 +123,7 @@ deactivate
 - **Filter**: Apply filters to the connection list
 - **Export**: Save the connection data to a CSV file
 - **Auto-refresh**: Enable/disable automatic updates
+- **IP-lookup**: Lookup Remote IP adresses
 
 ## Right-click on any connection to access context menu options:
 
