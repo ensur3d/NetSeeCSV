@@ -4,8 +4,6 @@ A Python-based GUI application for monitoring active network connections on Linu
 
 <img width="998" height="624" alt="Screenshot from 2026-06-27 14-28-50" src="https://github.com/user-attachments/assets/5c36f332-fcfd-434f-af2f-16745dec01f9" />
 
-<img width="995" height="631" alt="Screenshot from 2026-06-27 14-30-07" src="https://github.com/user-attachments/assets/02ae042c-f439-49c4-9434-3179123db901" />
-
 <img width="997" height="625" alt="Screenshot from 2026-06-27 14-29-43" src="https://github.com/user-attachments/assets/bf0a3923-54c9-48f5-9117-9bc2b956a705" />
 
 ## Requirements
