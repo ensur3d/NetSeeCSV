@@ -4,332 +4,314 @@ NetSeeCSV for Linux
 Displays all active TCP/UDP connections including IPv4 and IPv6
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, TclError
+import sys
+import csv
 import subprocess
 import threading
 import re
 import os
-import logging
 import webbrowser
+import ipaddress
 from datetime import datetime
 
-class NetworkMonitor:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("NetSeeCSV")
-        self.root.geometry("1600x900")
-        
-        # Style
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        
-        # Variables
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QTreeWidget, QTreeWidgetItem, QHeaderView, QPushButton, QLabel,
+    QLineEdit, QComboBox, QCheckBox, QMenu, QMessageBox, QFileDialog,
+    QDialog, QStatusBar, QGridLayout, QTabWidget
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction
+
+LIGHT_STYLE = """
+QMainWindow, QDialog { background-color: #f0f0f0; }
+QWidget { background-color: #f0f0f0; color: #000000; }
+QTreeWidget { background-color: #ffffff; color: #000000; alternate-background-color: #f5f5f5; }
+QTreeWidget::item:selected { background-color: #3478e8; color: #ffffff; }
+QHeaderView::section { background-color: #e0e0e0; color: #000000; font-weight: bold; padding: 4px; border: 1px solid #cccccc; }
+QPushButton { background-color: #e0e0e0; color: #000000; border: 1px solid #cccccc; padding: 4px 12px; }
+QPushButton:hover { background-color: #d0d0d0; }
+QLabel { color: #000000; background: transparent; }
+QLineEdit, QComboBox { background-color: #ffffff; color: #000000; border: 1px solid #cccccc; padding: 2px; }
+QComboBox QAbstractItemView { background-color: #ffffff; color: #000000; }
+QCheckBox { color: #000000; background: transparent; spacing: 4px; }
+QCheckBox::indicator { border: 2px solid #666666; width: 13px; height: 13px; border-radius: 2px; }
+QCheckBox::indicator:checked { background-color: #3478e8; border-color: #3478e8; }
+QMenuBar { background-color: #f0f0f0; color: #000000; }
+QMenuBar::item:selected { background-color: #3478e8; color: #ffffff; }
+QMenu { background-color: #f0f0f0; color: #000000; }
+QMenu::item:selected { background-color: #3478e8; color: #ffffff; }
+QStatusBar { background-color: #f0f0f0; color: #000000; }
+QScrollBar:vertical { background: #e0e0e0; width: 12px; }
+QScrollBar::handle:vertical { background: #b0b0b0; min-height: 20px; }
+"""
+
+DARK_STYLE = """
+QMainWindow, QDialog { background-color: #2b2b2b; }
+QWidget { background-color: #2b2b2b; color: #ffffff; }
+QTreeWidget { background-color: #333333; color: #ffffff; alternate-background-color: #3a3a3a; }
+QTreeWidget::item:selected { background-color: #4a4a4a; color: #ffffff; }
+QHeaderView::section { background-color: #3a3a3a; color: #ffffff; font-weight: bold; padding: 4px; border: 1px solid #555555; }
+QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 4px 12px; }
+QPushButton:hover { background-color: #4a4a4a; }
+QLabel { color: #ffffff; background: transparent; }
+QLineEdit, QComboBox { background-color: #333333; color: #ffffff; border: 1px solid #555555; padding: 2px; }
+QComboBox QAbstractItemView { background-color: #333333; color: #ffffff; }
+QCheckBox { color: #ffffff; background: transparent; spacing: 4px; }
+QCheckBox::indicator { border: 2px solid #aaaaaa; width: 13px; height: 13px; border-radius: 2px; }
+QCheckBox::indicator:checked { background-color: #4a9eff; border-color: #4a9eff; }
+QMenuBar { background-color: #2b2b2b; color: #ffffff; }
+QMenuBar::item:selected { background-color: #4a4a4a; }
+QMenu { background-color: #2b2b2b; color: #ffffff; }
+QMenu::item:selected { background-color: #4a4a4a; }
+QStatusBar { background-color: #2b2b2b; color: #ffffff; }
+QScrollBar:vertical { background: #3a3a3a; width: 12px; }
+QScrollBar::handle:vertical { background: #555555; min-height: 20px; }
+"""
+
+
+class NetworkMonitor(QMainWindow):
+    update_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str)
+    refresh_complete_signal = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NetSeeCSV")
+        self.resize(1000, 600)
+
         self.connections = []
         self.refreshing = False
         self.auto_refresh_enabled = False
-        self.auto_refresh_interval = 4000  # 4 seconds
-        self.auto_refresh_job = None
-        
-        # GUI
+        self.auto_refresh_interval = 4000
+        self.dark_mode = True
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        self.main_layout = QVBoxLayout(central)
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
+
         self.create_menu()
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
         self.create_toolbar()
         self.create_treeview()
         self.create_status_bar()
-        
-        # Configure main_frame grid weights after all children are added
-        self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(1, weight=1)
-        
-        # Initialize dark mode after GUI is created
-        self.dark_mode = False
+
+        self.auto_refresh_timer = QTimer()
+        self.auto_refresh_timer.timeout.connect(self.refresh_connections)
+
+        self.update_signal.connect(self.update_connection_tree)
+        self.error_signal.connect(self.show_error)
+        self.refresh_complete_signal.connect(self._refresh_complete)
+
         self.apply_style()
-        
-        # Start with initial refresh
         self.refresh_connections()
-        
-        # Start auto-refresh if enabled
-        if self.auto_refresh_enabled:
-            self.start_auto_refresh()
-        
+
     def create_menu(self):
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-        
-        # File menu
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Refresh", command=self.refresh_connections)
-        file_menu.add_command(label="Export to CSV", command=self.export_csv)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
-        
-        # View menu
-        view_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="View", menu=view_menu)
-        view_menu.add_command(label="Refresh", command=self.refresh_connections)
-        view_menu.add_command(label="Auto-refresh", command=self.toggle_auto_refresh)
-        self.dark_mode_var = tk.BooleanVar()
-        view_menu.add_checkbutton(label="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode)
-        
-        # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="About", command=self.show_about)
-        
+        menubar = self.menuBar()
+
+        file_menu = menubar.addMenu("File")
+        file_menu.addAction("Import CSV", self.import_csv)
+        file_menu.addAction("Export to CSV", self.export_csv)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
+
+        view_menu = menubar.addMenu("View")
+        self.dark_mode_action = QAction("Dark Mode", checkable=True)
+        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
+        view_menu.addAction(self.dark_mode_action)
+
+        help_menu = menubar.addMenu("Help")
+        help_menu.addAction("About", self.show_about)
+
     def create_toolbar(self):
-        toolbar = ttk.Frame(self.main_frame)
-        toolbar.grid(row=0, column=0, sticky='ew', padx=5, pady=5)
-        
-        ttk.Button(toolbar, text="Refresh", command=self.refresh_connections).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Filter", command=self.show_filters).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Export", command=self.export_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="IP Lookup", command=self.show_ip_lookup).pack(side=tk.LEFT, padx=2)
-        
-        # Auto-refresh checkbox
-        self.auto_refresh_var = tk.BooleanVar()
-        ttk.Checkbutton(toolbar, text="Auto-refresh", variable=self.auto_refresh_var, 
-                       command=self.toggle_auto_refresh).pack(side=tk.RIGHT, padx=2)
-        
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.refresh_connections)
+        toolbar_layout.addWidget(self.refresh_btn)
+
+        self.filter_btn = QPushButton("Filter")
+        self.filter_btn.clicked.connect(self.show_filters)
+        toolbar_layout.addWidget(self.filter_btn)
+
+        self.export_btn = QPushButton("Export")
+        self.export_btn.clicked.connect(self.export_csv)
+        toolbar_layout.addWidget(self.export_btn)
+
+        self.ip_lookup_btn = QPushButton("IP Lookup")
+        self.ip_lookup_btn.clicked.connect(self.show_ip_lookup)
+        toolbar_layout.addWidget(self.ip_lookup_btn)
+
+        toolbar_layout.addStretch()
+
+        self.auto_refresh_cb = QCheckBox("Auto-refresh")
+        self.auto_refresh_cb.stateChanged.connect(self.toggle_auto_refresh)
+        toolbar_layout.addWidget(self.auto_refresh_cb)
+
+        self.main_layout.addWidget(toolbar)
+
     def create_treeview(self):
-        tree_frame = ttk.Frame(self.main_frame)
-        tree_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
-        
-        columns = ("Protocol", "Local Address", "Local Port", "Remote Address", "Remote Port", "State", "PID", "Process")
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=30)
-        
-        for col in columns:
-            self.tree.heading(col, text=col, command=lambda c=col: self.sort_treeview(c))
-            self.tree.column(col, width=120)
-            
-        self.tree.column("Protocol", width=80)
-        self.tree.column("Local Address", width=180)
-        self.tree.column("Local Port", width=80)
-        self.tree.column("Remote Address", width=180)
-        self.tree.column("Remote Port", width=80)
-        self.tree.column("State", width=100)
-        self.tree.column("PID", width=70)
-        self.tree.column("Process", width=150)
-        
-        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=v_scrollbar.set)
-        
-        self.tree.grid(row=0, column=0, sticky='nsew')
-        v_scrollbar.grid(row=0, column=1, sticky='ns')
-        
-        tree_frame.grid_rowconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(1, weight=0)
-        
-        # Context menu
-        self.context_menu = tk.Menu(self.main_frame, tearoff=0)
-        self.context_menu.add_command(label="Show Connection Info", command=self.show_connection_details)
-        self.context_menu.add_command(label="Kill Process", command=self.kill_process)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Copy Local Address", command=self.copy_local_address)
-        self.context_menu.add_command(label="Copy Remote Address", command=self.copy_remote_address)
-        
-        self.tree.bind("<Button-3>", self.show_context_menu)
-        
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        self.tree = QTreeWidget()
+        self.live_tree = self.tree
+        self._setup_tree_widget(self.tree)
+        self.tab_widget.addTab(self.tree, "Live Scan")
+
+        self.main_layout.addWidget(self.tab_widget)
+
+    def _setup_tree_widget(self, tree):
+        tree.setColumnCount(8)
+        tree.setHeaderLabels([
+            "Protocol", "Local Address", "Local Port", "Remote Address",
+            "Remote Port", "State", "PID", "Process"
+        ])
+        tree.setAlternatingRowColors(True)
+        tree.setRootIsDecorated(False)
+        tree.setSortingEnabled(True)
+        tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        tree.customContextMenuRequested.connect(self.show_context_menu)
+
+        widths = [80, 180, 100, 180, 100, 100, 70, 120]
+        for i, w in enumerate(widths):
+            tree.setColumnWidth(i, w)
+
+        tree.header().setStretchLastSection(True)
+
+    def _on_tab_changed(self, index):
+        self.tree = self.tab_widget.widget(index)
+
+    def close_tab(self, index):
+        if index == 0:
+            return
+        widget = self.tab_widget.widget(index)
+        self.tab_widget.removeTab(index)
+        widget.deleteLater()
+
     def create_status_bar(self):
-        self.status_bar = ttk.Label(self.main_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
-        self.status_bar.grid(row=2, column=0, sticky='ew', padx=5, pady=(0, 5))
-        
-    def show_context_menu(self, event):
-        try:
-            self.tree.selection_set(self.tree.identify_row(event.y))
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        except Exception as e:
-            logger.error(f"Error showing context menu: {e}")
-            pass
-            
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_label = QLabel("Ready")
+        self.status_bar.addWidget(self.status_label)
+
+    def show_context_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+
+        self.tree.setCurrentItem(item)
+
+        menu = QMenu()
+        menu.addAction("Show Connection Info", self.show_connection_details)
+        menu.addAction("Kill Process", self.kill_process)
+        menu.addSeparator()
+        menu.addAction("Copy Local Address", self.copy_local_address)
+        menu.addAction("Copy Local Port", self.copy_local_port)
+        menu.addAction("Copy Remote Address", self.copy_remote_address)
+        menu.addAction("Copy Remote Port", self.copy_remote_port)
+        menu.exec(self.tree.mapToGlobal(pos))
+
     def show_filters(self):
-        # Simple filter dialog
-        filter_window = tk.Toplevel(self.root)
-        filter_window.title("Filter Connections")
-        filter_window.geometry("300x280")
-        filter_window.transient(self.root)
-        
-        self.apply_dark_mode_to_window(filter_window)
-        
-        def is_valid_ip(ip):
-            import ipaddress
-            try:
-                ipaddress.ip_address(ip)
-                return True
-            except ValueError:
-                return False
-        
-        def validate_ip_input(P):
-            if P == "":
-                return True
-            if all(c in "0123456789.:abcdefABCDEF" for c in P):
-                return True
-            return False
-        
-        # Address filter
-        ttk.Label(filter_window, text="Address Filter:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        addr_var = tk.StringVar()
-        addr_entry = ttk.Entry(filter_window, textvariable=addr_var)
-        addr_entry.grid(row=0, column=1, padx=5, pady=5)
-        
-        vcmd = (addr_entry.register(validate_ip_input), '%P')
-        addr_entry.config(validate='key', validatecommand=vcmd)
-        
-        # Context menu for paste functionality
-        context_menu = tk.Menu(filter_window, tearoff=0)
-        context_menu.add_command(label="Paste", command=lambda: self.paste_to_focused(filter_window, addr_entry))
-        
-        def show_context_menu(event):
-            focused = filter_window.focus_get()
-            if focused == addr_entry or focused == protocol_combo or focused == state_combo or focused == port_entry:
-                context_menu.tk_popup(event.x_root, event.y_root)
-        
-        filter_window.bind("<Button-3>", show_context_menu)
-        
-        # Protocol filter
-        ttk.Label(filter_window, text="Protocol:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        protocol_var = tk.StringVar()
-        protocol_combo = ttk.Combobox(filter_window, textvariable=protocol_var, 
-                                     values=["All", "TCP", "UDP", "TCP6", "UDP6"])
-        protocol_combo.set("All")
-        protocol_combo.grid(row=1, column=1, padx=5, pady=5)
-        
-        # State filter
-        ttk.Label(filter_window, text="State:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
-        state_var = tk.StringVar()
-        state_combo = ttk.Combobox(filter_window, textvariable=state_var,
-                                  values=["All", "ESTAB", "LISTEN", "TIME_WAIT", "CLOSE_WAIT", "UNCONN"])
-        state_combo.set("All")
-        state_combo.grid(row=2, column=1, padx=5, pady=5)
-        
-        # Port filter
-        ttk.Label(filter_window, text="Port Filter:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        port_var = tk.StringVar()
-        port_entry = ttk.Entry(filter_window, textvariable=port_var)
-        port_entry.grid(row=3, column=1, padx=5, pady=5)
-        
-        def validate_port_input(P):
-            if P == "":
-                return True
-            if all(c in "0123456789" for c in P):
-                return True
-            return False
-        
-        vcmd_port = (port_entry.register(validate_port_input), '%P')
-        port_entry.config(validate='key', validatecommand=vcmd_port)
-        
+        if self.tree is not self.live_tree:
+            QMessageBox.warning(self, "Warning", "Filter is only available on the Live Scan tab")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Filter Connections")
+        dialog.resize(300, 280)
+
+        layout = QGridLayout(dialog)
+
+        layout.addWidget(QLabel("Address Filter:"), 0, 0)
+        addr_entry = QLineEdit()
+        layout.addWidget(addr_entry, 0, 1)
+
+        layout.addWidget(QLabel("Protocol:"), 1, 0)
+        protocol_combo = QComboBox()
+        protocol_combo.addItems(["All", "TCP", "UDP", "TCP6", "UDP6"])
+        layout.addWidget(protocol_combo, 1, 1)
+
+        layout.addWidget(QLabel("State:"), 2, 0)
+        state_combo = QComboBox()
+        state_combo.addItems(["All", "ESTAB", "LISTEN", "TIME_WAIT", "CLOSE_WAIT", "UNCONN"])
+        layout.addWidget(state_combo, 2, 1)
+
+        layout.addWidget(QLabel("Port Filter:"), 3, 0)
+        port_entry = QLineEdit()
+        layout.addWidget(port_entry, 3, 1)
+
         def apply_filter():
-            addr = addr_var.get().strip()
-            if addr and not is_valid_ip(addr):
-                messagebox.showwarning("Invalid IP", "Not a valid IP address")
-                return
-            port = port_var.get().strip()
+            addr = addr_entry.text().strip()
+            if addr:
+                try:
+                    ipaddress.ip_address(addr)
+                except ValueError:
+                    QMessageBox.warning(dialog, "Invalid IP", "Not a valid IP address")
+                    return
+            port = port_entry.text().strip()
             if port:
                 try:
-                    port_num = int(port)
-                    if port_num < 1 or port_num > 65535:
-                        messagebox.showwarning("Invalid Port", "Port must be between 1 and 65535")
+                    p = int(port)
+                    if p < 1 or p > 65535:
+                        QMessageBox.warning(dialog, "Invalid Port", "Port must be between 1 and 65535")
                         return
                 except ValueError:
-                    messagebox.showwarning("Invalid Port", "Port must be a number")
+                    QMessageBox.warning(dialog, "Invalid Port", "Port must be a number")
                     return
-            self.apply_filters(protocol_var.get(), state_var.get(), addr_var.get(), port_var.get(), filter_window)
-        
-        # Apply button
-        ttk.Button(filter_window, text="Apply", command=apply_filter).grid(row=4, column=0, columnspan=2, pady=10)
-        
-    def apply_filters(self, protocol, state, address_filter, port_filter, window):
-        # Filter the connections based on the criteria
-        filtered_connections = []
-        
-        # Get the original connections
-        original_connections = self.connections
-        
-        for conn in original_connections:
-            # Apply protocol filter - convert to lowercase for comparison
+            self.apply_filters(protocol_combo.currentText(), state_combo.currentText(),
+                               addr_entry.text(), port_entry.text())
+            dialog.accept()
+
+        btn = QPushButton("Apply")
+        btn.clicked.connect(apply_filter)
+        layout.addWidget(btn, 4, 0, 1, 2)
+
+        dialog.exec()
+
+    def apply_filters(self, protocol, state, address_filter, port_filter):
+        if self.tree is not self.live_tree:
+            QMessageBox.warning(self, "Warning", "Filter is only available on the Live Scan tab")
+            return
+        filtered = []
+        for conn in self.connections:
             if protocol != "All" and protocol.lower() != conn['protocol'].lower():
                 continue
-                
-            # Apply state filter
             if state != "All" and state != conn['state']:
                 continue
-                
-            # Apply address filter - connection should match either local OR remote address
             if address_filter and address_filter not in conn['local_addr'] and address_filter not in conn['remote_addr']:
                 continue
-            
-            # Apply port filter - connection should match either local port OR remote port
             if port_filter and port_filter not in str(conn.get('port', '')) and port_filter not in str(conn.get('remote_port', '')):
                 continue
-                
-            # If we get here, the connection matches all filters
-            filtered_connections.append(conn)
-            
-        # Update the treeview with filtered connections
-        self.update_connection_tree(filtered_connections)
-        
-        # Close the filter window
-        window.destroy()
-        
+            filtered.append(conn)
+        self.update_connection_tree(filtered)
+
     def show_ip_lookup(self):
-        ip_window = tk.Toplevel(self.root)
-        ip_window.title("IP Lookup")
-        ip_window.geometry("400x350")
-        ip_window.transient(self.root)
-        
-        self.apply_dark_mode_to_window(ip_window)
-        
-        ttk.Label(ip_window, text="Enter IP Address:").pack(pady=(15, 5))
-        
-        ip_var = tk.StringVar()
-        ip_entry = ttk.Entry(ip_window, textvariable=ip_var, width=40)
-        ip_entry.pack(pady=5)
-        ip_entry.focus()
-        
-        def is_valid_ip(ip):
-            import ipaddress
+        dialog = QDialog(self)
+        dialog.setWindowTitle("IP Lookup")
+        dialog.resize(400, 200)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Enter IP Address:"))
+
+        ip_entry = QLineEdit()
+        layout.addWidget(ip_entry)
+
+        def open_url(url_template):
+            ip = ip_entry.text().strip()
+            if not ip:
+                QMessageBox.warning(dialog, "Invalid IP", "Please enter an IP address")
+                return
             try:
                 ipaddress.ip_address(ip)
-                return True
             except ValueError:
-                return False
-        
-        def validate_ip_input(P):
-            if P == "":
-                return True
-            if all(c in "0123456789.:abcdefABCDEF" for c in P):
-                return True
-            return False
-        
-        vcmd = (ip_entry.register(validate_ip_input), '%P')
-        ip_entry.config(validate='key', validatecommand=vcmd)
-        
-        # Context menu for paste functionality
-        context_menu = tk.Menu(ip_window, tearoff=0)
-        context_menu.add_command(label="Paste", command=lambda: self.paste_to_focused(ip_window, ip_entry))
-        
-        def show_context_menu(event):
-            context_menu.tk_popup(event.x_root, event.y_root)
-        
-        ip_entry.bind("<Button-3>", show_context_menu)
-        
-        def open_url(url_template):
-            ip = ip_var.get().strip()
-            if not ip:
-                messagebox.showwarning("Invalid IP", "Please enter an IP address")
+                QMessageBox.warning(dialog, "Invalid IP", "Not a valid IP address")
                 return
-            if not is_valid_ip(ip):
-                messagebox.showwarning("Invalid IP", "Not a valid IP address")
-                return
-            url = url_template.format(ip=ip)
-            webbrowser.open(url)
-        
-        button_frame = ttk.Frame(ip_window)
-        button_frame.pack(pady=15)
-        
+            webbrowser.open(url_template.format(ip=ip))
+
         services = [
             ("Greynoise", "https://www.greynoise.io/viz/ip/{ip}"),
             ("Shodan", "https://www.shodan.io/search?query={ip}"),
@@ -338,194 +320,133 @@ class NetworkMonitor:
             ("BGP_HE", "https://bgp.he.net/ip/{ip}"),
             ("Blacklist_Check", "https://www.blacklistmaster.com/check?t={ip}"),
         ]
-        
+
+        btn_grid = QWidget()
+        grid_layout = QGridLayout(btn_grid)
         for i, (name, url) in enumerate(services):
-            btn = ttk.Button(button_frame, text=name, command=lambda u=url: open_url(u))
-            btn.grid(row=i//2, column=i%2, padx=5, pady=5, sticky='ew')
-        
-        button_frame.grid_columnconfigure(0, weight=1)
-        button_frame.grid_columnconfigure(1, weight=1)
-        
-        ttk.Button(ip_window, text="Close", command=ip_window.destroy).pack(pady=10)
-        
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda checked, u=url: open_url(u))
+            grid_layout.addWidget(btn, i // 2, i % 2)
+        layout.addWidget(btn_grid)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+
+        dialog.exec()
+
     def _validate_commands(self, commands):
-        """
-        Validate and sanitize commands to ensure only allowed commands can be executed.
-        This prevents command injection by strictly whitelisting allowed commands and arguments.
-        """
-        # Define the exact whitelist of allowed commands and their arguments
         ALLOWED_WHITELIST = {
             ('ss', '-tulnpa'),
             ('ss', '-tulnp', '-o'),
         }
-        
         validated = []
-        
         for cmd in commands:
-            # Ensure command is a list/tuple
             if not isinstance(cmd, (list, tuple)):
                 raise ValueError(f"Invalid command format: {cmd}")
-            
-            # Ensure all elements are strings
             if not all(isinstance(arg, str) for arg in cmd):
                 raise ValueError(f"Command contains non-string arguments: {cmd}")
-            
-            # Check for dangerous characters that could indicate injection attempts
             dangerous_chars = [';', '&', '|', '$', '`', '>', '<', '*', '?', '{', '}', '[', ']']
             for arg in cmd:
                 for char in dangerous_chars:
                     if char in arg:
                         raise ValueError(f"Potentially dangerous character '{char}' found in command: {cmd}")
-            
-            # Convert to tuple for whitelist comparison
-            cmd_tuple = tuple(cmd)
-            
-            # Strict whitelist validation - only exact matches allowed
-            if cmd_tuple not in ALLOWED_WHITELIST:
+            if tuple(cmd) not in ALLOWED_WHITELIST:
                 raise ValueError(f"Command not in allowed whitelist: {cmd}")
-            
-            # Command is validated - convert back to list for subprocess
             validated.append(list(cmd))
-        
         return validated
-    
+
     def refresh_connections(self):
         if self.refreshing:
             return
-            
         self.refreshing = True
-        self.root.update()
-        
         thread = threading.Thread(target=self._refresh_connections_thread)
         thread.daemon = True
         thread.start()
-        
+
     def _refresh_connections_thread(self):
         try:
             connections = []
-            
-            # Define allowed commands whitelist - only these specific commands are permitted
-            # Each command must be a list of strings with exact allowed arguments
             ALLOWED_COMMANDS = [
-                ['ss', '-tulnpa'],  # All TCP/UDP connections with process info
-                ['ss', '-tulnp', '-o'],  # With timers
+                ['ss', '-tulnpa'],
+                ['ss', '-tulnp', '-o'],
             ]
-            
-            # Validate and sanitize commands
             validated_commands = self._validate_commands(ALLOWED_COMMANDS)
-            
             for cmd in validated_commands:
                 try:
-                    # nosec B603 - Commands are strictly validated through _validate_commands() whitelist
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                     if result.returncode == 0:
                         connections.extend(self.parse_ss_output(result.stdout))
                 except Exception as e:
-                    logger.error(f"Error running command {cmd}: {e}")
                     continue
-            
-            # Remove duplicates while preserving order
+
             seen = set()
-            unique_connections = []
+            unique = []
             for conn in connections:
-                # Create a unique key based on local address, remote address, and protocol
                 key = (conn['local_addr'], conn['remote_addr'], conn['protocol'])
                 if key not in seen:
                     seen.add(key)
-                    unique_connections.append(conn)
-            
-            self.root.after(0, lambda: self.update_connection_tree(unique_connections))
-            
+                    unique.append(conn)
+
+            self.update_signal.emit(unique)
+
         except subprocess.TimeoutExpired:
-            self.root.after(0, lambda: messagebox.showerror("Error", "Command timed out"))
-            self.root.after(0, self._refresh_complete)
+            self.error_signal.emit("Command timed out")
+            self.refresh_complete_signal.emit()
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Error refreshing connections: {str(e)}"))
-            self.root.after(0, self._refresh_complete)
-            
+            self.error_signal.emit(f"Error refreshing connections: {str(e)}")
+            self.refresh_complete_signal.emit()
+
     def parse_ss_output(self, output):
         connections = []
-        
-        # Skip header lines
         lines = output.strip().split('\n')
-        
-        # Find the line with column headers
+
         header_line = None
         for i, line in enumerate(lines):
             if line.strip().startswith('Netid'):
                 header_line = i
                 break
-        
+
         if header_line is None:
-            # If we can't find the header, process all lines
             lines_to_process = lines
         else:
             lines_to_process = lines[header_line + 1:]
-        
+
         for line in lines_to_process:
             if not line.strip():
                 continue
-                
             try:
-                # More robust parsing approach for ss output
-                # The ss output format is: Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
-                # We'll use regex to properly extract fields
-                
-                # Split by whitespace but preserve the structure
-                # Use split with maxsplit to avoid issues with IPv6 addresses containing colons
-                parts = line.split(None, 6)  # Split by any whitespace, max 7 parts
-                
+                parts = line.split(None, 6)
                 if len(parts) < 6:
-                    # If we don't have enough parts, try to get what we can
-                    if len(parts) >= 6:
-                        # At least we have the basic fields
-                        pass
-                    else:
-                        continue
-                
-                # Extract the fields properly
+                    continue
+
                 protocol = parts[0] if len(parts) > 0 else ""
                 state = parts[1] if len(parts) > 1 else ""
                 recv_q = parts[2] if len(parts) > 2 else ""
                 send_q = parts[3] if len(parts) > 3 else ""
                 local_addr_port = parts[4] if len(parts) > 4 else ""
                 remote_addr_port = parts[5] if len(parts) > 5 else ""
-                
-                # Extract PID and process name if available
+
                 pid = "-"
                 process = "-"
-                
-                # Process info is in the 7th field if it exists
+
                 if len(parts) > 6:
                     process_info = parts[6]
                     if process_info.startswith('users:('):
-                        # Process info in format: users:(("process_name",pid=1234,fd=56))
                         try:
-                            # Extract PID
                             pid_match = re.search(r'pid=(\d+)', process_info)
                             if pid_match:
                                 pid = pid_match.group(1)
-                            
-                            # Extract process name - more robust extraction
-                            # Try to match the process name directly from the users:(("name",...) format
                             name_match = re.search(r'users:\(\("([^"]+)",', process_info)
                             if name_match:
                                 process = name_match.group(1)
-                            else:
-                                # Fallback: try to extract from quotes in the process info
-                                name_match = re.search(r'"([^"]+)"', process_info)
-                                if name_match:
-                                    process = name_match.group(1)
-                        except Exception as e:
-                            logger.warning(f"Error extracting process info: {e}")
+                        except Exception:
                             pass
-                
-                # Extract remote port
+
                 remote_port = self.extract_port(remote_addr_port)
                 local_addr = self.extract_address(local_addr_port)
                 remote_addr = self.extract_address(remote_addr_port)
-                
-                # Only add connection if we have the basic info
+
                 if local_addr_port and remote_addr_port:
                     connections.append({
                         'protocol': protocol,
@@ -537,209 +458,226 @@ class NetworkMonitor:
                         'port': self.extract_port(local_addr_port),
                         'remote_port': remote_port
                     })
-                
-            except Exception as e:
-                logger.warning(f"Error parsing line: {line} - {e}")
+            except Exception:
                 continue
-                
+
         return connections
-        
+
     def extract_port(self, address):
-        """Extract port from address string"""
         try:
             if ':' in address:
-                # Handle IPv6 addresses that contain brackets
                 if address.startswith('[') and ']' in address:
-                    # IPv6 address with brackets
-                    port_start = address.rfind(':') + 1
-                    return address[port_start:]
+                    return address[address.rfind(':') + 1:]
                 else:
-                    # IPv4 or IPv6 without brackets
                     return address.split(':')[-1]
             return "N/A"
-        except:
+        except Exception:
             return "N/A"
-            
+
     def extract_address(self, address):
-        """Extract address without port"""
         try:
             if ':' in address:
                 if address.startswith('[') and ']' in address:
-                    addr_start = address.find('[') + 1
-                    addr_end = address.find(']:')
-                    if addr_end > 0:
-                        return address[addr_start:addr_end]
+                    start = address.find('[') + 1
+                    end = address.find(']:')
+                    if end > 0:
+                        return address[start:end]
                     return address
                 else:
                     return ':'.join(address.split(':')[:-1])
             return address
-        except:
+        except Exception:
             return address
-            
+
     def update_connection_tree(self, connections):
-        # Clear existing items
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-            
-        # Add new items
+        self.live_tree.clear()
         for conn in connections:
-            self.tree.insert("", tk.END, values=(
-                conn['protocol'],
-                conn['local_addr'],
-                conn['port'],
-                conn['remote_addr'],
-                conn['remote_port'],
-                conn['state'],
-                conn['pid'],
-                conn['process']
-            ))
-            
-        # Update status bar
+            item = QTreeWidgetItem()
+            item.setText(0, conn['protocol'])
+            item.setText(1, conn['local_addr'])
+            item.setText(2, conn['port'])
+            item.setText(3, conn['remote_addr'])
+            item.setText(4, conn['remote_port'])
+            item.setText(5, conn['state'])
+            item.setText(6, conn['pid'])
+            item.setText(7, conn['process'])
+            self.live_tree.addTopLevelItem(item)
+
         count = len(connections)
-        self.status_bar.config(text=f"Showing {count} connections")
+        self.status_label.setText(f"Showing {count} connections")
         self.connections = connections
-        self._refresh_complete()
-        
+        self.refresh_complete_signal.emit()
+
+    def show_error(self, message):
+        QMessageBox.critical(self, "Error", message)
+
     def _refresh_complete(self):
         self.refreshing = False
         if self.auto_refresh_enabled:
             self.start_auto_refresh()
-        
-    def sort_treeview(self, column):
-        # Simple sorting implementation
-        items = [(self.tree.set(child, column), child) for child in self.tree.get_children('')]
-        items.sort(reverse=column == "Remote Port")
-        
-        for index, (val, child) in enumerate(items):
-            self.tree.move(child, '', index)
-            
+
     def show_connection_details(self):
-        selected = self.tree.selection()
+        selected = self.tree.selectedItems()
         if not selected:
             return
-            
-        item = self.tree.item(selected[0])
-        values = item['values']
-        
-        details = f"Protocol: {values[0]}\n"
-        details += f"Local Address: {values[1]}\n"
-        details += f"Local Port: {values[2]}\n"
-        details += f"Remote Address: {values[3]}\n"
-        details += f"Remote Port: {values[4]}\n"
-        details += f"State: {values[5]}\n"
-        details += f"PID: {values[6]}\n"
-        details += f"Process: {values[7]}"
-        
-        messagebox.showinfo("Connection Details", details)
-        
+        item = selected[0]
+        vals = [item.text(i) for i in range(8)]
+        details = (
+            f"Protocol: {vals[0]}\n"
+            f"Local Address: {vals[1]}\n"
+            f"Local Port: {vals[2]}\n"
+            f"Remote Address: {vals[3]}\n"
+            f"Remote Port: {vals[4]}\n"
+            f"State: {vals[5]}\n"
+            f"PID: {vals[6]}\n"
+            f"Process: {vals[7]}"
+        )
+        QMessageBox.information(self, "Connection Details", details)
+
     def kill_process(self):
-        selected = self.tree.selection()
+        if self.tree is not self.live_tree:
+            QMessageBox.warning(self, "Warning", "Can only kill processes from the Live Scan tab")
+            return
+        selected = self.tree.selectedItems()
         if not selected:
             return
-            
-        item = self.tree.item(selected[0])
-        pid = item['values'][6]
-        
+        pid = selected[0].text(6)
         if pid == "-" or pid == "N/A":
-            messagebox.showwarning("Warning", "No PID available for this connection")
+            QMessageBox.warning(self, "Warning", "No PID available for this connection")
             return
-            
         try:
-            if messagebox.askyesno("Confirm", f"Kill process with PID {pid}?"):
+            reply = QMessageBox.question(self, "Confirm", f"Kill process with PID {pid}?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
                 os.kill(int(pid), 9)
-                messagebox.showinfo("Success", f"Process {pid} killed successfully")
+                QMessageBox.information(self, "Success", f"Process {pid} killed successfully")
                 self.refresh_connections()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to kill process: {str(e)}")
-            
+            QMessageBox.critical(self, "Error", f"Failed to kill process: {str(e)}")
+
     def copy_local_address(self):
-        selected = self.tree.selection()
+        selected = self.tree.selectedItems()
         if not selected:
             return
-            
-        item = self.tree.item(selected[0])
-        address = item['values'][1]  # Local Address
-        self.root.clipboard_clear()
-        self.root.clipboard_append(address)
-        
+        address = selected[0].text(1)
+        QApplication.clipboard().setText(address)
+
     def copy_remote_address(self):
-        selected = self.tree.selection()
+        selected = self.tree.selectedItems()
         if not selected:
             return
-            
-        item = self.tree.item(selected[0])
-        address = item['values'][3]  # Remote Address
-        self.root.clipboard_clear()
-        self.root.clipboard_append(address)
-        
-    def paste_to_focused(self, window, entry_widget):
-        try:
-            clipboard_text = window.clipboard_get()
-            focused = window.focus_get()
-            if hasattr(focused, 'insert'):
-                focused.insert(tk.INSERT, clipboard_text)
-        except:
-            pass
-        
-    def export_csv(self):
-        if not self.connections:
-            messagebox.showwarning("Warning", "No connections to export")
+        address = selected[0].text(3)
+        QApplication.clipboard().setText(address)
+
+    def copy_local_port(self):
+        selected = self.tree.selectedItems()
+        if not selected:
             return
-        
-        # Hide hidden files in file dialog
-        try:
-            try:
-                self.root.tk.call('tk_getOpenFile', '-foobarbaz')
-            except TclError:
-                pass
-            self.root.tk.call('set', '::tk::dialog::file::showHiddenBtn', '0')
-            self.root.tk.call('set', '::tk::dialog::file::showHiddenVar', '0')
-        except:
-            pass
-        
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        port = selected[0].text(2)
+        QApplication.clipboard().setText(port)
+
+    def copy_remote_port(self):
+        selected = self.tree.selectedItems()
+        if not selected:
+            return
+        port = selected[0].text(4)
+        QApplication.clipboard().setText(port)
+
+    def import_csv(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import CSV", "", "CSV files (*.csv)"
         )
-        
         if not file_path:
             return
-            
+
+        try:
+            rows = []
+            with open(file_path, 'r') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header is None:
+                    QMessageBox.warning(self, "Warning", "CSV file is empty")
+                    return
+                for row in reader:
+                    if len(row) < 8:
+                        continue
+                    rows.append(row)
+
+            if not rows:
+                QMessageBox.warning(self, "Warning", "No valid data rows found in CSV")
+                return
+
+            tree = QTreeWidget()
+            self._setup_tree_widget(tree)
+            tree.setSortingEnabled(False)
+
+            for row in rows:
+                item = QTreeWidgetItem()
+                item.setText(0, row[0].strip())  # Protocol
+                item.setText(1, row[1].strip())  # Local Address
+                item.setText(2, row[6].strip())  # Local Port
+                item.setText(3, row[2].strip())  # Remote Address
+                item.setText(4, row[7].strip())  # Remote Port
+                item.setText(5, row[3].strip())  # State
+                item.setText(6, row[4].strip())  # PID
+                item.setText(7, row[5].strip())  # Process
+                tree.addTopLevelItem(item)
+
+            tree.setSortingEnabled(True)
+
+            name = os.path.splitext(os.path.basename(file_path))[0]
+            self.tab_widget.addTab(tree, name)
+            self.tab_widget.setCurrentWidget(tree)
+
+            QMessageBox.information(self, "Import Successful",
+                                    f"Imported {len(rows)} connections from {os.path.basename(file_path)}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to import CSV: {str(e)}")
+
+    def export_csv(self):
+        tree = self.tree
+        if not tree.topLevelItemCount():
+            QMessageBox.warning(self, "Warning", "No data to export")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export to CSV", "", "CSV files (*.csv)"
+        )
+        if not file_path:
+            return
+        if not file_path.endswith('.csv'):
+            file_path += '.csv'
+
         try:
             with open(file_path, 'w') as f:
-                # Write header
                 f.write("Protocol,Local Address,Remote Address,State,PID,Process,Local Port,Remote Port\n")
-                
-                # Write data
-                for conn in self.connections:
-                    f.write(f"{conn['protocol']},{conn['local_addr']},{conn['remote_addr']},"
-                           f"{conn['state']},{conn['pid']},{conn['process']},{conn['port']},{conn['remote_port']}\n")
-                    
-            messagebox.showinfo("Success", f"Connections exported to {file_path}")
-            
+                for i in range(tree.topLevelItemCount()):
+                    item = tree.topLevelItem(i)
+                    f.write(f"{item.text(0)},{item.text(1)},{item.text(3)},"
+                            f"{item.text(5)},{item.text(6)},{item.text(7)},{item.text(2)},{item.text(4)}\n")
+            QMessageBox.information(self, "Success", f"Connections exported to {file_path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to export CSV: {str(e)}")
-            
+            QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
+
     def toggle_auto_refresh(self):
-        self.auto_refresh_enabled = self.auto_refresh_var.get()
+        self.auto_refresh_enabled = not self.auto_refresh_enabled
         if self.auto_refresh_enabled:
             self.start_auto_refresh()
-            messagebox.showinfo("Auto-refresh", "Auto-refresh enabled")
+            QMessageBox.information(self, "Auto-refresh", "Auto-refresh enabled")
         else:
             self.stop_auto_refresh()
-            messagebox.showinfo("Auto-refresh", "Auto-refresh disabled")
-            
+            QMessageBox.information(self, "Auto-refresh", "Auto-refresh disabled")
+
     def start_auto_refresh(self):
-        self.stop_auto_refresh()  # Stop any existing auto-refresh
-        self.auto_refresh_job = self.root.after(self.auto_refresh_interval, self.refresh_connections)
-        
+        self.stop_auto_refresh()
+        self.auto_refresh_timer.start(self.auto_refresh_interval)
+
     def stop_auto_refresh(self):
-        if self.auto_refresh_job:
-            self.root.after_cancel(self.auto_refresh_job)
-            self.auto_refresh_job = None
-            
+        self.auto_refresh_timer.stop()
+
     def show_about(self):
-        about_text = (
+        QMessageBox.about(self, "About",
             "NetSeeCSV\n"
             "Displays all active TCP/UDP connections on Linux\n"
             "Supports IPv4 and IPv6 addresses\n\n"
@@ -750,129 +688,26 @@ class NetworkMonitor:
             "- Auto-refresh functionality\n"
             "- Dark Mode\n"
             "- Kill processes listed with connection\n"
-            "- IP-Lookup feature\n"
+            "- IP-Lookup feature"
         )
-        messagebox.showinfo("About", about_text)
-        
+
     def toggle_dark_mode(self):
         self.dark_mode = not self.dark_mode
+        self.dark_mode_action.setChecked(self.dark_mode)
         self.apply_style()
-        
+
     def apply_style(self):
-        # Configure ttk theme
-        self.style.theme_use('clam')
-        
-        if self.dark_mode:
-            # Configure dark mode styles
-            self.style.configure('Treeview', 
-                               background='#333333',
-                               foreground='#ffffff',
-                               fieldbackground='#333333',
-                               rowheight=25)
-            self.style.map('Treeview', 
-                          background=[('selected', '#4a4a4a')],
-                          foreground=[('selected', '#ffffff')])
-            self.style.configure('Treeview.Heading', 
-                               background='#3a3a3a',
-                               foreground='#ffffff',
-                               font=('Arial', 10, 'bold'))
-            
-            # Configure other widgets for dark mode
-            self.root.configure(bg='#2b2b2b')
-            self.style.configure('TFrame', background='#2b2b2b')
-            self.style.configure('TLabel', background='#2b2b2b', foreground='#ffffff')
-            self.style.configure('TCheckbutton', background='#2b2b2b', foreground="#ffffff")
-            self.style.configure('TEntry', fieldbackground='#333333', foreground='#ffffff')
-            
-            # Update menu bar for dark mode
-            self.root.option_add('*Menu.background', '#2b2b2b')
-            self.root.option_add('*Menu.foreground', '#ffffff')
-            self.root.option_add('*Menu.activeBackground', '#4a4a4a')
-            self.root.option_add('*Menu.activeForeground', '#ffffff')
-            
-        else:
-            # Configure light mode styles
-            self.style.configure('Treeview', 
-                               background='#ffffff',
-                               foreground='#000000',
-                               fieldbackground='#ffffff',
-                               rowheight=25)
-            self.style.map('Treeview', 
-                          background=[('selected', '#3478e8')],
-                          foreground=[('selected', '#ffffff')])
-            self.style.configure('Treeview.Heading', 
-                               background='#e0e0e0',
-                               foreground='#000000',
-                               font=('Arial', 10, 'bold'))
-            
-            # Configure other widgets for light mode
-            self.root.configure(bg='#f0f0f0')
-            self.style.configure('TFrame', background='#f0f0f0')
-            self.style.configure('TLabel', background='#f0f0f0', foreground='#000000')
-            self.style.configure('TCheckbutton', background='#f0f0f0', foreground='#000000')
-            self.style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000')
-            
-            # Update menu bar for light mode
-            self.root.option_add('*Menu.background', '#f0f0f0')
-            self.root.option_add('*Menu.foreground', '#000000')
-            self.root.option_add('*Menu.activeBackground', '#3478e8')
-            self.root.option_add('*Menu.activeForeground', '#ffffff')
-            
-        # Update the context menu to match current mode
-        if self.context_menu:
-            bg_color = '#2b2b2b' if self.dark_mode else '#f0f0f0'
-            fg_color = '#ffffff' if self.dark_mode else '#000000'
-            self.context_menu.configure(bg=bg_color, fg=fg_color)
-            menu_end = self.context_menu.index(tk.END)
-            if menu_end is not None:
-                for i in range(menu_end + 1):
-                    try:
-                        entry_type = self.context_menu.type(i)
-                        if entry_type in ['cascade', 'command', 'checkbutton', 'radiobutton']:
-                            self.context_menu.entryconfig(i, background=bg_color, foreground=fg_color)
-                    except Exception:
-                        pass
-    
-    def apply_dark_mode_to_window(self, window):
-        if self.dark_mode:
-            window.configure(bg='#2b2b2b')
-            for widget in window.winfo_children():
-                self._apply_dark_mode_to_widget(widget)
-    
-    def _apply_dark_mode_to_widget(self, widget):
-        widget_class = widget.winfo_class()
-        if widget_class in ['TFrame', 'TLabelframe']:
-            widget.configure(style='Dark.TFrame' if hasattr(widget, 'configure') else None)
-            for child in widget.winfo_children():
-                self._apply_dark_mode_to_widget(child)
-        elif widget_class == 'TLabel':
-            widget.configure(background='#2b2b2b', foreground='#ffffff')
-        elif widget_class == 'TEntry':
-            widget.configure(background='#333333', foreground='#ffffff', fieldbackground='#333333')
-        elif widget_class == 'TButton':
-            widget.configure(style='Dark.TButton')
-        elif widget_class == 'TCombobox':
-            widget.configure(background='#333333', foreground='#ffffff', fieldbackground='#333333')
-        
-        for child in widget.winfo_children():
-            self._apply_dark_mode_to_widget(child)
+        style = DARK_STYLE if self.dark_mode else LIGHT_STYLE
+        self.setStyleSheet(style)
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('network_monitor.log'),
-        logging.StreamHandler()
-    ]
-)
-
-logger = logging.getLogger(__name__)
 
 def main():
-    root = tk.Tk()
-    app = NetworkMonitor(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    window = NetworkMonitor()
+    window.show()
+    sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
