@@ -29,7 +29,15 @@ sudo dnf install python3 python3-pip python3-virtualenv
 sudo pacman -S python python-pip python-virtualenv
 ```
 
-## Setup Virtual Environment
+## Setup
+Clone Repo
+```bash
+git clone https://github.com/ensur3d/NetSeeCSV.git
+```
+Navigate to dir after cloning
+```bash
+cd NetSeeCSV
+```
 
 Run the application in a Python virtual environment.
 
