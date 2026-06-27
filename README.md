@@ -123,4 +123,4 @@ Opens a dialog to enter an IP address and look it up on popular security intelli
 
 ## License
 
-This project is open source and available under the [MIT License](LICENSE.txt).
+This project is open source and available under the [MIT License](LICENSE).
