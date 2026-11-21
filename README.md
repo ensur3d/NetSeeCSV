@@ -21,6 +21,10 @@ Navigate to dir after cloning
 ```bash
 cd NetSeeCSV
 ```
+Make sure the script is executable
+```bash
+chmod +x run.sh
+```
 
 ## Usage — One Command
 
