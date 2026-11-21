@@ -12,6 +12,31 @@ A Python-based GUI application for monitoring active network connections on Linu
 - Linux operating system with `ss` command (usually pre-installed)
 - PyQt6 (install via pip)
 
+## Setup
+Clone Repo
+```bash
+git clone https://github.com/ensur3d/NetSeeCSV.git
+```
+Navigate to dir after cloning
+```bash
+cd NetSeeCSV
+```
+
+## Usage — One Command
+
+Run the application with a single command:
+```bash
+./run.sh
+```
+That's it. `run.sh` automatically:
+1. Checks that `python3` and `ss` are available (with install hints if not)
+2. Creates the `.venv` virtual environment (if it doesn't exist yet)
+3. Installs the requirements from `requirements.txt`
+4. Launches NetSeeCSV
+
+Safe to run again at any time — it reuses the existing `.venv` and only installs what's missing.
+
+
 ## Prerequisites: Install Python3
 
 Python is usually pre-installed. Open your terminal and type `python3 --version`.
@@ -29,17 +54,10 @@ sudo dnf install python3 python3-pip python3-virtualenv
 sudo pacman -S python python-pip python-virtualenv
 ```
 
-## Setup
-Clone Repo
-```bash
-git clone https://github.com/ensur3d/NetSeeCSV.git
-```
-Navigate to dir after cloning
-```bash
-cd NetSeeCSV
-```
 
-Run the application in a Python virtual environment.
+## Alternative: Manual Setup
+
+Prefer to manage the virtual environment yourself? Follow these steps instead of `./run.sh`:
 
 **Create Venv**
 ```bash
@@ -49,17 +67,12 @@ python3 -m venv .venv
 ```bash
 source .venv/bin/activate
 ```
-## Install Requirements
-
+**Install Requirements**
 ```bash
 pip install -r requirements.txt
 ```
-
-## Usage
-
-Run the application (with venv activated):
+**Run the application (with venv activated):**
 ```bash
-source .venv/bin/activate
 python3 NetSeeCSV.py
 ```
 To deactivate the venv:
@@ -74,7 +87,7 @@ deactivate
 - **Import**: Import prior CSV files for review or examination.
 - **Export**: Export connection data to CSV format
 - **Auto-Refresh**: Automatically periodic updates of connection data
-- **Dark Mode**: Toggle between light and dark themes
+- **Themes**: Choose Light, Dark, or System (follow desktop) from the View menu
 - **IP Lookup**: Lookup an IP address across multiple security services
 - **Context Menu**: Right-click actions for connection details and termination
 
@@ -109,6 +122,10 @@ deactivate
 Opens a dialog to enter an IP address and look it up on popular security intelligence services:
 - **Greynoise**, **Shodan**, **AbuseIPDB**, **VirusTotal**, **BGP_HE**, **Blacklist Check**
 
+The IP Lookup window is **non-modal**: the main window stays fully interactive while it's open. You can keep working with the connection list and copy/paste between the two windows — for example, right-click a connection → *Copy Remote Address*, then click into the IP Lookup box and paste. Clicking **IP Lookup** again while the window is already open simply brings it to the front instead of opening a second one.
+
+Right-clicking inside the address box shows a clean, icon-free menu (Undo, Redo, Cut, Copy, Paste, Select All) consistent with the rest of the app — same for the Filter dialog's input boxes.
+
 ## Right-click on any connection to access context menu options:
 
 - **Show Process Info**: Display detailed information about the connection
@@ -117,9 +134,13 @@ Opens a dialog to enter an IP address and look it up on popular security intelli
 - **Copy Remote Address**: Copy the remote address to clipboard
 - **Copy Local and Remote ports**: Copy ports to clipboard
 
-## Use the View menu to toggle Dark Mode on or off for the entire application:
+## Themes (View menu)
 
-- **Dark Mode**: Enable/disable dark theme for the main window and all dialogs
+Choose one of three themes from the View menu — exactly one is always selected, like a set of radio buttons:
+
+- **Light**: Light theme for the main window and all dialogs
+- **Dark**: Dark theme for the main window and all dialogs (default on first launch)
+- **System (follow desktop)**: Automatically matches your desktop's light/dark setting and updates live if it changes
 
 ## License
 
