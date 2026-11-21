@@ -21,7 +21,22 @@ from PyQt6.QtWidgets import (
     QDialog, QStatusBar, QGridLayout, QTabWidget
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QActionGroup, QGuiApplication, QIcon
+
+
+class CleanLineEdit(QLineEdit):
+    """QLineEdit whose standard right-click menu has no icons, matching the
+    icon-free menus used elsewhere in the app."""
+
+    @staticmethod
+    def strip_icons(menu):
+        for action in menu.actions():
+            action.setIcon(QIcon())
+
+    def contextMenuEvent(self, event):
+        menu = self.createStandardContextMenu()
+        self.strip_icons(menu)
+        menu.exec(event.globalPos())
 
 LIGHT_STYLE = """
 QMainWindow, QDialog { background-color: #f0f0f0; }
@@ -42,8 +57,17 @@ QMenuBar::item:selected { background-color: #3478e8; color: #ffffff; }
 QMenu { background-color: #f0f0f0; color: #000000; }
 QMenu::item:selected { background-color: #3478e8; color: #ffffff; }
 QStatusBar { background-color: #f0f0f0; color: #000000; }
-QScrollBar:vertical { background: #e0e0e0; width: 12px; }
-QScrollBar::handle:vertical { background: #b0b0b0; min-height: 20px; }
+QScrollBar:horizontal, QScrollBar:vertical { background: #e0e0e0; border: none; }
+QScrollBar:horizontal { height: 12px; margin: 0; }
+QScrollBar:vertical { width: 12px; margin: 0; }
+QScrollBar::handle:horizontal, QScrollBar::handle:vertical { background: #b0b0b0; border-radius: 5px; }
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover { background: #9e9e9e; }
+QScrollBar::handle:horizontal:pressed, QScrollBar::handle:vertical:pressed { background: #8f8f8f; }
+QScrollBar::handle:horizontal { min-width: 20px; }
+QScrollBar::handle:vertical { min-height: 20px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { width: 0; height: 0; border: none; background: transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """
 
 DARK_STYLE = """
@@ -65,8 +89,17 @@ QMenuBar::item:selected { background-color: #4a4a4a; }
 QMenu { background-color: #2b2b2b; color: #ffffff; }
 QMenu::item:selected { background-color: #4a4a4a; }
 QStatusBar { background-color: #2b2b2b; color: #ffffff; }
-QScrollBar:vertical { background: #3a3a3a; width: 12px; }
-QScrollBar::handle:vertical { background: #555555; min-height: 20px; }
+QScrollBar:horizontal, QScrollBar:vertical { background: #3a3a3a; border: none; }
+QScrollBar:horizontal { height: 12px; margin: 0; }
+QScrollBar:vertical { width: 12px; margin: 0; }
+QScrollBar::handle:horizontal, QScrollBar::handle:vertical { background: #555555; border-radius: 5px; }
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover { background: #6a6a6a; }
+QScrollBar::handle:horizontal:pressed, QScrollBar::handle:vertical:pressed { background: #787878; }
+QScrollBar::handle:horizontal { min-width: 20px; }
+QScrollBar::handle:vertical { min-height: 20px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { width: 0; height: 0; border: none; background: transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """
 
 
@@ -84,7 +117,8 @@ class NetworkMonitor(QMainWindow):
         self.refreshing = False
         self.auto_refresh_enabled = False
         self.auto_refresh_interval = 4000
-        self.dark_mode = True
+        self.theme = "dark"
+        self.ip_lookup_dialog = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -102,6 +136,7 @@ class NetworkMonitor(QMainWindow):
         self.update_signal.connect(self.update_connection_tree)
         self.error_signal.connect(self.show_error)
         self.refresh_complete_signal.connect(self._refresh_complete)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
 
         self.apply_style()
         self.refresh_connections()
@@ -116,9 +151,18 @@ class NetworkMonitor(QMainWindow):
         file_menu.addAction("Exit", self.close)
 
         view_menu = menubar.addMenu("View")
-        self.dark_mode_action = QAction("Dark Mode", checkable=True)
-        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
-        view_menu.addAction(self.dark_mode_action)
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_actions = {}
+        for mode, label in (("light", "Light"), ("dark", "Dark"),
+                            ("system", "System (follow desktop)")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(mode == self.theme)
+            action.triggered.connect(lambda checked, m=mode: self.set_theme(m))
+            self.theme_group.addAction(action)
+            view_menu.addAction(action)
+            self.theme_actions[mode] = action
 
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("About", self.show_about)
@@ -227,7 +271,7 @@ class NetworkMonitor(QMainWindow):
         layout = QGridLayout(dialog)
 
         layout.addWidget(QLabel("Address Filter:"), 0, 0)
-        addr_entry = QLineEdit()
+        addr_entry = CleanLineEdit()
         layout.addWidget(addr_entry, 0, 1)
 
         layout.addWidget(QLabel("Protocol:"), 1, 0)
@@ -241,7 +285,7 @@ class NetworkMonitor(QMainWindow):
         layout.addWidget(state_combo, 2, 1)
 
         layout.addWidget(QLabel("Port Filter:"), 3, 0)
-        port_entry = QLineEdit()
+        port_entry = CleanLineEdit()
         layout.addWidget(port_entry, 3, 1)
 
         def apply_filter():
@@ -290,6 +334,18 @@ class NetworkMonitor(QMainWindow):
         self.update_connection_tree(filtered)
 
     def show_ip_lookup(self):
+        # Modeless dialog: the main window stays fully interactive while this
+        # is open, so you can copy addresses from connections and paste them
+        # into the lookup box (and vice versa). A single dialog instance is
+        # reused for the lifetime of the app.
+        if self.ip_lookup_dialog is not None:
+            if self.ip_lookup_dialog.isVisible():
+                self.ip_lookup_dialog.raise_()
+                self.ip_lookup_dialog.activateWindow()
+            else:
+                self.ip_lookup_dialog.show()
+            return
+
         dialog = QDialog(self)
         dialog.setWindowTitle("IP Lookup")
         dialog.resize(400, 200)
@@ -297,7 +353,7 @@ class NetworkMonitor(QMainWindow):
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Enter IP Address:"))
 
-        ip_entry = QLineEdit()
+        ip_entry = CleanLineEdit()
         layout.addWidget(ip_entry)
 
         def open_url(url_template):
@@ -330,10 +386,11 @@ class NetworkMonitor(QMainWindow):
         layout.addWidget(btn_grid)
 
         close_btn = QPushButton("Close")
-        close_btn.clicked.connect(dialog.accept)
+        close_btn.clicked.connect(dialog.close)
         layout.addWidget(close_btn)
 
-        dialog.exec()
+        self.ip_lookup_dialog = dialog
+        dialog.show()
 
     def _validate_commands(self, commands):
         ALLOWED_WHITELIST = {
@@ -686,19 +743,27 @@ class NetworkMonitor(QMainWindow):
             "- Filter by TCP/UDP, Addresses, Port and State\n"
             "- Export to CSV\n"
             "- Auto-refresh functionality\n"
-            "- Dark Mode\n"
+            "- Themes: Light / Dark / System (follow desktop)\n"
             "- Kill processes listed with connection\n"
             "- IP-Lookup feature"
         )
 
-    def toggle_dark_mode(self):
-        self.dark_mode = not self.dark_mode
-        self.dark_mode_action.setChecked(self.dark_mode)
+    def set_theme(self, mode):
+        self.theme = mode
+        for m, action in self.theme_actions.items():
+            action.setChecked(m == mode)
         self.apply_style()
 
+    def _on_color_scheme_changed(self, scheme):
+        if self.theme == "system":
+            self.apply_style()
+
     def apply_style(self):
-        style = DARK_STYLE if self.dark_mode else LIGHT_STYLE
-        self.setStyleSheet(style)
+        if self.theme == "system":
+            dark = QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        else:
+            dark = self.theme == "dark"
+        self.setStyleSheet(DARK_STYLE if dark else LIGHT_STYLE)
 
 
 def main():
